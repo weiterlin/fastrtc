@@ -80,10 +80,9 @@ public class MediaCodecVideoDecoder {
   private static final String[] supportedVp9HwCodecPrefixes = {"OMX.qcom.", "OMX.Exynos."};
   // List of supported HW H.264 decoders.
   private static final String[] supportedH264HwCodecPrefixes = {
-      "OMX.qcom.", "OMX.Intel.", "OMX.Exynos."};
+      "OMX.qcom.", "OMX.Intel.", "OMX.Exynos.", "OMX.MTK."};
   // List of supported HW H.264 high profile decoders.
-  private static final String supportedQcomH264HighProfileHwCodecPrefix = "OMX.qcom.";
-  private static final String supportedExynosH264HighProfileHwCodecPrefix = "OMX.Exynos.";
+  private static final String[] supportedH264HighProfileHwCodecPrefixes = {"OMX.qcom."};
 
   // NV12 color format supported by QCOM codec, but not declared in MediaCodec -
   // see /hardware/qcom/media/mm-core/inc/OMX_QCOMExtns.h
@@ -161,22 +160,9 @@ public class MediaCodecVideoDecoder {
   }
 
   public static boolean isH264HighProfileHwSupported() {
-    if (hwDecoderDisabledTypes.contains(H264_MIME_TYPE)) {
-      return false;
-    }
-    // Support H.264 HP decoding on QCOM chips for Android L and above.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
-        && findDecoder(H264_MIME_TYPE, new String[] {supportedQcomH264HighProfileHwCodecPrefix})
-            != null) {
-      return true;
-    }
-    // Support H.264 HP decoding on Exynos chips for Android M and above.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
-        && findDecoder(H264_MIME_TYPE, new String[] {supportedExynosH264HighProfileHwCodecPrefix})
-            != null) {
-      return true;
-    }
-    return false;
+    return Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP
+        && !hwDecoderDisabledTypes.contains(H264_MIME_TYPE)
+        && (findDecoder(H264_MIME_TYPE, supportedH264HighProfileHwCodecPrefixes) != null);
   }
 
   public static void printStackTrace() {
@@ -201,9 +187,29 @@ public class MediaCodecVideoDecoder {
     public final int colorFormat; // Color format supported by codec.
   }
 
+  // List of devices with poor H.264 decoder quality.
+  // HW H.264 encoder on below devices has poor bitrate control - actual
+  // bitrates deviates a lot from the target value.
+  private static final String[] H264_HW_EXCEPTION_MODELS = new String[] {
+      "Mi-4c",
+      "m1 note",
+      "Nexus 4",
+      "M5 Note",
+      "MI 2S",
+  };
+  
   private static DecoderProperties findDecoder(String mime, String[] supportedCodecPrefixes) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
       return null; // MediaCodec.setParameters is missing.
+    }
+    // Check if device is in H.264 exception list.
+    if (mime.equals(H264_MIME_TYPE)) {
+      Logging.w(TAG, "Model: " + Build.MODEL);
+      List<String> exceptionModels = Arrays.asList(H264_HW_EXCEPTION_MODELS);
+      if (exceptionModels.contains(Build.MODEL)) {
+        Logging.w(TAG, "Model: " + Build.MODEL + " has black listed H.264 decoder.");
+        return null;
+      }
     }
     Logging.d(TAG, "Trying to find HW decoder for mime " + mime);
     for (int i = 0; i < MediaCodecList.getCodecCount(); ++i) {
@@ -228,6 +234,11 @@ public class MediaCodecVideoDecoder {
       }
       Logging.d(TAG, "Found candidate decoder " + name);
 
+      if (mime.equals(H264_MIME_TYPE) && name.startsWith("OMX.MTK.")) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+          break; // MediaCodec.setParameters is missing for MTK Soc chips.
+        }
+      }
       // Check if this is supported decoder.
       boolean supportedCodec = false;
       for (String codecPrefix : supportedCodecPrefixes) {
